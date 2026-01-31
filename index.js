@@ -67,20 +67,57 @@ io.on('connection', (socket) => {
     // 2. ENTRAR NA SALA (PLAYER)
     socket.on('join-room', ({ roomCode, playerName }) => {
         const room = rooms[roomCode];
-        if (room && room.state === 'LOBBY') {
-            // Verifica se nome já existe
-            if (room.players.some(p => p.name === playerName)) {
-                socket.emit('error', 'Nome já existe nesta sala.');
+        if (room) { // aceita se state != LOBBY para reconexão
+
+            // Verifica se é reconexão (busca por nome)
+            const existingPlayer = room.players.find(p => p.name === playerName);
+
+            if (existingPlayer) {
+                // RECONEXÃO: Atualiza ID e resincroniza
+                console.log(`Reconexão detectada: ${playerName} (${existingPlayer.id} -> ${socket.id})`);
+                existingPlayer.id = socket.id; // Atualiza para o novo socket
+                socket.join(roomCode);
+
+                socket.emit('joined-success', { playerId: socket.id });
+                socket.emit('your-hand', existingPlayer.hand);
+
+                // Se o jogo já estiver rolando, envia dados da rodada
+                if (room.state !== 'LOBBY') {
+                    const judge = room.players[room.currentJudgeIndex];
+                    socket.emit('round-start', {
+                        question: room.currentQuestion,
+                        judgeId: judge.id,
+                        judgeName: judge.name
+                    });
+
+                    // Se já estiver na fase de julgamento ou mesa tiver cartas
+                    if (room.tableCards.length > 0) {
+                        if (room.state === 'JUDGING') {
+                            socket.emit('start-judging', room.tableCards);
+                        } else {
+                            // Se apenas cartas jogadas mas ainda não julgando
+                            socket.emit('update-table', room.tableCards);
+                        }
+                    }
+                }
+
+                io.to(roomCode).emit('update-players', room.players);
                 return;
             }
-            const player = { id: socket.id, name: playerName, score: 0, hand: [] };
-            room.players.push(player);
-            socket.join(roomCode);
 
-            io.to(roomCode).emit('update-players', room.players);
-            socket.emit('joined-success', { playerId: socket.id });
+            // Novo Jogador (somente se LOBBY)
+            if (room.state === 'LOBBY') {
+                const player = { id: socket.id, name: playerName, score: 0, hand: [] };
+                room.players.push(player);
+                socket.join(roomCode);
+
+                io.to(roomCode).emit('update-players', room.players);
+                socket.emit('joined-success', { playerId: socket.id });
+            } else {
+                socket.emit('error', 'Jogo já começou e seu nome não está na lista para reconectar.');
+            }
         } else {
-            socket.emit('error', 'Sala não encontrada ou jogo já começou.');
+            socket.emit('error', 'Sala não encontrada.');
         }
     });
 
@@ -213,49 +250,68 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         console.log('Desconectado:', socket.id);
 
-        // Procura em todas as salas
         Object.keys(rooms).forEach(code => {
             const room = rooms[code];
+            // Procura pelo ID EXATO que desconectou
             const playerIndex = room.players.findIndex(p => p.id === socket.id);
 
-            if (playerIndex !== -1) {
-                const player = room.players[playerIndex];
-                room.players.splice(playerIndex, 1);
-                io.to(code).emit('update-players', room.players); // Avisa quem sobrou
+            // Se não achou, pode ser que o usuário já tenha reconectado (ID mudou), então ignoramos
+            if (playerIndex === -1) return;
 
-                // Se ficou sem ninguém, deleta a sala
-                if (room.players.length === 0) {
-                    delete rooms[code];
+            // Se achou, remove o jogador (realmente caiu)
+            const player = room.players[playerIndex];
+            console.log(`Jogador saiu definitivamente: ${player.name}`);
+
+            room.players.splice(playerIndex, 1);
+
+            // Ajusta o ponteiro do Juiz se necessário (se quem saiu estava antes do juiz na lista)
+            if (playerIndex < room.currentJudgeIndex) {
+                room.currentJudgeIndex--;
+            }
+
+            io.to(code).emit('update-players', room.players); // Avisa quem sobrou
+
+            if (room.players.length === 0) {
+                delete rooms[code];
+                return;
+            }
+
+            // LÓGICA DE CONTINUIDADE (Se o jogo estava rolando)
+            if (room.state === 'PLAYING' || room.state === 'JUDGING') {
+                // Verifica continuidade do jogo
+                const playersToPlay = Math.max(0, room.players.length - 1); // -1 do juiz
+
+                if (playersToPlay === 0) {
+                    // Só sobrou 1 jogador (o juiz, ou nem isso)
+                    room.state = 'LOBBY';
+                    io.to(code).emit('error', 'Jogadores insuficientes. Voltando ao Lobby.');
                     return;
                 }
 
-                // Se o jogo estava rolando...
-                if (room.state === 'PLAYING') {
-                    // Se foi o Juiz que saiu: Reinicia a rodada? Ou passa a vez?
-                    // Simplificação: Reinicia o round para evitar travamento
-                    if (room.currentJudgeIndex === playerIndex) {
-                        // O juiz saiu. 
-                        io.to(code).emit('error', 'O Juiz fugiu! Reiniciando rodada...');
-                        // Volta pro lobby ou tenta reiniciar?
-                        // Melhor tentar passar o juiz.
-                        if (room.currentJudgeIndex >= room.players.length) room.currentJudgeIndex = 0;
-                        // Mas o estado PLAYING fica inconsistente. Vamos forçar um force-reset.
-                        // Na vdd, o mais simples é verificar se com a saida dele, todos q sobraram ja jogaram.
-                    } else {
-                        // Se foi um jogador que saiu, verifique se agora todos já jogaram.
-                        const judgeId = room.players[room.currentJudgeIndex]?.id;
-                        if (!judgeId) return; // Se o juiz tbm n existe mais
+                // Ajuste de segurança para o ponteiro do juiz
+                if (room.currentJudgeIndex >= room.players.length) {
+                    room.currentJudgeIndex = 0;
+                }
 
-                        const playersToPlay = room.players.filter(p => p.id !== judgeId).length;
-                        // Remove cartas jogadas por quem saiu (opcional, mas bom pra nao travar)
-                        room.tableCards = room.tableCards.filter(c => c.playerId !== socket.id);
+                // Se estamos no meio da rodada, verificamos se a saída da pessoa permite avançar
+                // (Ex: Só faltava ela jogar)
 
-                        if (room.tableCards.length >= playersToPlay && playersToPlay > 0) {
-                            room.state = 'JUDGING';
-                            room.tableCards.sort(() => Math.random() - 0.5);
-                            io.to(code).emit('start-judging', room.tableCards);
-                        }
-                    }
+                const currentJudge = room.players[room.currentJudgeIndex];
+                if (!currentJudge) return;
+
+                const judgeId = currentJudge.id;
+
+                // Remove cartas jogadas por quem saiu para não "sujar" a mesa
+                room.tableCards = room.tableCards.filter(c => c.playerId !== socket.id);
+
+                const playedCount = room.tableCards.length;
+                const needed = room.players.filter(p => p.id !== judgeId).length;
+
+                // Se já jugaram todos que sobraram
+                if (playedCount >= needed && needed > 0 && room.state === 'PLAYING') {
+                    room.state = 'JUDGING';
+                    room.tableCards.sort(() => Math.random() - 0.5);
+                    io.to(code).emit('start-judging', room.tableCards);
                 }
             }
         });
