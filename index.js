@@ -171,10 +171,9 @@ io.on('connection', (socket) => {
 
         // Verifica se é o Juiz quem está pedindo
         const judgeId = room.players[room.currentJudgeIndex].id;
-        // Opcional: permitir que HOST também revele (útil para testes ou TV touch)
-        const isHost = (socket.id === room.hostId);
 
-        if (socket.id !== judgeId && !isHost) return;
+        // Apenas o Juiz pode revelar
+        if (socket.id !== judgeId) return;
 
         if (room.tableCards[index]) {
             if (!room.tableCards[index].revealed) {
