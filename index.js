@@ -65,7 +65,7 @@ io.on('connection', (socket) => {
     });
 
     // 2. ENTRAR NA SALA (PLAYER)
-    socket.on('join-room', ({ roomCode, playerName }) => {
+    socket.on('join-room', ({ roomCode, playerName, avatar }) => { // <--- Added avatar
         const room = rooms[roomCode];
         if (room) { // aceita se state != LOBBY para reconexão
 
@@ -76,6 +76,7 @@ io.on('connection', (socket) => {
                 // RECONEXÃO: Atualiza ID e resincroniza
                 console.log(`Reconexão detectada: ${playerName} (${existingPlayer.id} -> ${socket.id})`);
                 existingPlayer.id = socket.id; // Atualiza para o novo socket
+                if (avatar) existingPlayer.avatar = avatar; // Update avatar if provided on reconnect
                 socket.join(roomCode);
 
                 socket.emit('joined-success', { playerId: socket.id });
@@ -107,7 +108,13 @@ io.on('connection', (socket) => {
 
             // Novo Jogador (somente se LOBBY)
             if (room.state === 'LOBBY') {
-                const player = { id: socket.id, name: playerName, score: 0, hand: [] };
+                const player = {
+                    id: socket.id,
+                    name: playerName,
+                    score: 0,
+                    hand: [],
+                    avatar: avatar || null // <--- Store avatar
+                };
                 room.players.push(player);
                 socket.join(roomCode);
 
@@ -314,11 +321,4 @@ io.on('connection', (socket) => {
                     io.to(code).emit('start-judging', room.tableCards);
                 }
             }
-        });
-    });
-});
-
-// Adicione '0.0.0.0' para liberar acesso externo/emulador
-server.listen(3000, '0.0.0.0', () => {
-    console.log('SERVER RODANDO NA PORTA 3000 (Aberto para rede)');
-});
+   
