@@ -145,18 +145,10 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 3. INICIAR JOGO
-    socket.on('start-game', (roomCode) => {
+    // Helper para iniciar rodada
+    const startRound = (roomCode) => {
         const room = rooms[roomCode];
         if (!room) return;
-
-        // Host check
-        if (socket.id !== room.hostId) return;
-
-        if (room.players.length < 3) {
-            socket.emit('error', 'Mínimo de 3 jogadores para iniciar.');
-            return;
-        }
 
         // Se o deck estiver acabando, reembaralha (excluindo cartas nas mãos)
         if (room.deck.length < room.players.length * 5) {
@@ -183,7 +175,7 @@ io.on('connection', (socket) => {
         });
 
         const judge = room.players[room.currentJudgeIndex];
-        if (!judge) return; // Segurança
+        if (!judge) return;
 
         io.to(roomCode).emit('round-start', {
             question: room.currentQuestion,
@@ -196,6 +188,35 @@ io.on('connection', (socket) => {
         });
 
         io.to(roomCode).emit('update-players', room.players);
+    };
+
+    // 3. INICIAR JOGO
+    socket.on('start-game', ({ roomCode, settings }) => {
+        const room = rooms[roomCode];
+        if (!room) return;
+
+        // Host check
+        if (socket.id !== room.hostId) return;
+
+        if (room.players.length < 3) {
+            socket.emit('error', 'Mínimo de 3 jogadores para iniciar.');
+            return;
+        }
+
+        // Save Settings
+        // Default: { timer: 5, maxPoints: 10 }
+        room.settings = {
+            timer: settings?.timer || 5,
+            maxPoints: settings?.maxPoints || 10
+        };
+
+        // Reset scores if new game
+        room.players.forEach(p => p.score = 0);
+
+        // Reset Judge Logic for fresh start
+        room.currentJudgeIndex = -1; // Will become 0 in startRound logic (+1)
+
+        startRound(roomCode);
     });
 
     // 4. JOGAR CARTA
@@ -203,23 +224,19 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room || room.state !== 'PLAYING') return;
 
-        // Identifica jogador e juiz
         const player = room.players.find(p => p.id === socket.id);
         if (!player) return;
 
         const judgeId = room.players[room.currentJudgeIndex].id;
 
-        // JUIZ NÃO JOGA CARTA
         if (socket.id === judgeId) {
             socket.emit('error', 'O Juiz não joga cartas nesta fase!');
             return;
         }
 
-        // Evita jogar 2x
         if (room.tableCards.find(c => c.playerId === socket.id)) return;
 
         player.hand = player.hand.filter(c => c !== cardText);
-        // Garante que revealed começa false
         room.tableCards.push({ playerId: socket.id, text: cardText, revealed: false });
 
         io.to(player.id).emit('your-hand', player.hand);
@@ -233,7 +250,6 @@ io.on('connection', (socket) => {
             room.tableCards.sort(() => Math.random() - 0.5);
             io.to(roomCode).emit('start-judging', room.tableCards);
 
-            // Redundância para garantir que apps destravem
             setTimeout(() => {
                 io.to(roomCode).emit('update-table', room.tableCards);
             }, 500);
@@ -245,26 +261,21 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room) return;
 
-        // Verifica se é o Juiz quem está pedindo
         const judgeId = room.players[room.currentJudgeIndex].id;
-
-        // Apenas o Juiz pode revelar
         if (socket.id !== judgeId) return;
 
-        if (room.tableCards[index]) {
-            if (!room.tableCards[index].revealed) {
-                room.tableCards[index].revealed = true;
-                io.to(roomCode).emit('update-table', room.tableCards);
-            }
+        if (room.tableCards[index] && !room.tableCards[index].revealed) {
+            room.tableCards[index].revealed = true;
+            io.to(roomCode).emit('update-table', room.tableCards);
         }
     });
 
     // 6. ESCOLHER VENCEDOR
     socket.on('choose-winner', ({ roomCode, cardIndex }) => {
         const room = rooms[roomCode];
-        const winnerCard = room.tableCards[cardIndex];
+        if (!room) return;
 
-        // Só pode escolher carta revelada? Geralmente sim, mas vamos deixar livre.
+        const winnerCard = room.tableCards[cardIndex];
         if (!winnerCard) return;
 
         const winner = room.players.find(p => p.id === winnerCard.playerId);
@@ -272,11 +283,34 @@ io.on('connection', (socket) => {
         if (winner) {
             winner.score += 1;
             room.state = 'RESULT';
+
+            // CHECK MAX POINTS (GAME OVER)
+            if (winner.score >= (room.settings?.maxPoints || 10)) {
+                io.to(roomCode).emit('game-ended', {
+                    winnerName: winner.name,
+                    scores: room.players
+                });
+                room.state = 'LOBBY'; // Reset state (but keep players/room)
+                return;
+            }
+
+            // ROUND WINNER & NEXT ROUND TIMER
+            const nextRoundIn = room.settings?.timer || 5;
+
             io.to(roomCode).emit('round-winner', {
                 winnerName: winner.name,
                 winningCard: winnerCard.text,
-                scores: room.players
+                scores: room.players,
+                nextRoundIn: nextRoundIn
             });
+
+            // Auto-start next round
+            setTimeout(() => {
+                // Check if room still exists and state is still RESULT (prevent validation race conditions)
+                if (rooms[roomCode] && rooms[roomCode].state === 'RESULT') {
+                    startRound(roomCode);
+                }
+            }, nextRoundIn * 1000);
         }
     });
 
