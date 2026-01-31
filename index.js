@@ -328,32 +328,26 @@ io.on('connection', (socket) => {
         // 1. Emit via socket (for foreground/web)
         io.to(roomCode).emit('notification', { message });
 
-        // 2. Send Push Notification (FCM)
-        const tokens = room.players
-            .map(p => p.fcmToken)
-            .filter(t => t && typeof t === 'string' && t.length > 10);
+        // 2. Send Push Notification (FCM Topic)
+        if (admin.apps.length > 0) {
+            const topic = `room_${roomCode}`;
+            console.log(`Sending Push Notification to Topic: ${topic}`);
 
-        if (tokens.length > 0) {
-            console.log(`Sending Push Notification to ${tokens.length} devices...`);
-
-            // Check if admin is initialized
-            if (admin.apps.length > 0) {
-                admin.messaging().sendMulticast({
-                    tokens: tokens,
-                    notification: {
-                        title: 'Aviso do Host',
-                        body: message
-                    }
+            admin.messaging().send({
+                topic: topic,
+                notification: {
+                    title: 'Aviso do Host',
+                    body: message
+                }
+            })
+                .then((response) => {
+                    console.log('FCM Topic Success:', response);
                 })
-                    .then((response) => {
-                        console.log('FCM Success:', response.successCount, 'Failure:', response.failureCount);
-                    })
-                    .catch((error) => {
-                        console.log('FCM Error:', error);
-                    });
-            } else {
-                console.log("FCM Skipped: Admin not initialized.");
-            }
+                .catch((error) => {
+                    console.log('FCM Topic Error:', error);
+                });
+        } else {
+            console.log("FCM Skipped: Admin not initialized.");
         }
     });
 
