@@ -3,27 +3,6 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const admin = require('firebase-admin');
-
-// --- FIREBASE ADMIN SETUP ---
-// NOTE: You must provide your own serviceAccountKey.json
-try {
-    // Check if the service account file exists or use environment variables
-    // For local dev, you might require('./serviceAccountKey.json')
-    // admin.initializeApp({
-    //   credential: admin.credential.cert(require('./serviceAccountKey.json'))
-    // });
-
-    // Fallback: Using default application credentials or skipping if not configured
-    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-        admin.initializeApp();
-        console.log("Firebase Admin Initialized");
-    } else {
-        console.log("Firebase Admin NOT Initialized (Missing Credentials)");
-    }
-} catch (e) {
-    console.log("Firebase Admin Init Error:", e.message);
-}
 
 const app = express();
 app.use(cors());
