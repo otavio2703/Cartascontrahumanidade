@@ -3,6 +3,27 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const admin = require('firebase-admin');
+
+// --- FIREBASE ADMIN SETUP ---
+// NOTE: You must provide your own serviceAccountKey.json
+try {
+    // Check if the service account file exists or use environment variables
+    // For local dev, you might require('./serviceAccountKey.json')
+    // admin.initializeApp({
+    //   credential: admin.credential.cert(require('./serviceAccountKey.json'))
+    // });
+
+    // Fallback: Using default application credentials or skipping if not configured
+    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        admin.initializeApp();
+        console.log("Firebase Admin Initialized");
+    } else {
+        console.log("Firebase Admin NOT Initialized (Missing Credentials)");
+    }
+} catch (e) {
+    console.log("Firebase Admin Init Error:", e.message);
+}
 
 const app = express();
 app.use(cors());
@@ -73,7 +94,7 @@ io.on('connection', (socket) => {
     });
 
     // 2. ENTRAR NA SALA (PLAYER)
-    socket.on('join-room', ({ roomCode, playerName, avatar, hostSecret }) => {
+    socket.on('join-room', ({ roomCode, playerName, avatar, hostSecret, fcmToken }) => {
         const room = rooms[roomCode];
         if (room) {
 
@@ -102,6 +123,8 @@ io.on('connection', (socket) => {
                 console.log(`Reconexão: ${playerName}`);
                 existingPlayer.id = socket.id;
                 if (avatar) existingPlayer.avatar = avatar;
+                if (fcmToken) existingPlayer.fcmToken = fcmToken; // Update Token
+
                 socket.join(roomCode);
 
                 socket.emit('joined-success', { playerId: socket.id });
@@ -130,7 +153,8 @@ io.on('connection', (socket) => {
                     name: playerName,
                     score: 0,
                     hand: [],
-                    avatar: avatar || null
+                    avatar: avatar || null,
+                    fcmToken: fcmToken || null
                 };
                 room.players.push(player);
                 socket.join(roomCode);
@@ -311,6 +335,46 @@ io.on('connection', (socket) => {
                     startRound(roomCode);
                 }
             }, nextRoundIn * 1000);
+        }
+    });
+
+    // 7. ENVIAR NOTIFICAÇÃO (HOST -> PLAYERS)
+    socket.on('send-notification', ({ roomCode, message }) => {
+        const room = rooms[roomCode];
+        if (!room) return;
+
+        // Verify Host
+        if (socket.id !== room.hostId) return;
+
+        // 1. Emit via socket (for foreground/web)
+        io.to(roomCode).emit('notification', { message });
+
+        // 2. Send Push Notification (FCM)
+        const tokens = room.players
+            .map(p => p.fcmToken)
+            .filter(t => t && typeof t === 'string' && t.length > 10);
+
+        if (tokens.length > 0) {
+            console.log(`Sending Push Notification to ${tokens.length} devices...`);
+
+            // Check if admin is initialized
+            if (admin.apps.length > 0) {
+                admin.messaging().sendMulticast({
+                    tokens: tokens,
+                    notification: {
+                        title: 'Aviso do Host',
+                        body: message
+                    }
+                })
+                    .then((response) => {
+                        console.log('FCM Success:', response.successCount, 'Failure:', response.failureCount);
+                    })
+                    .catch((error) => {
+                        console.log('FCM Error:', error);
+                    });
+            } else {
+                console.log("FCM Skipped: Admin not initialized.");
+            }
         }
     });
 
