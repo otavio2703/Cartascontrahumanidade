@@ -43,6 +43,7 @@ const RESPOSTAS = [
 const rooms = {};
 
 const generateCode = () => Math.random().toString(36).substring(2, 6).toUpperCase();
+const generateSecret = () => Math.random().toString(36).substring(2, 15);
 
 io.on('connection', (socket) => {
     console.log('Cliente conectado:', socket.id);
@@ -50,8 +51,11 @@ io.on('connection', (socket) => {
     // 1. CRIAR SALA (HOST)
     socket.on('create-room', (playerName = 'Host') => {
         const roomCode = generateCode();
+        const hostSecret = generateSecret(); // Admin token
+
         rooms[roomCode] = {
             hostId: socket.id,
+            hostSecret: hostSecret,
             players: [],
             state: 'LOBBY',
             deck: [...RESPOSTAS].sort(() => Math.random() - 0.5),
@@ -61,7 +65,7 @@ io.on('connection', (socket) => {
         };
 
         socket.join(roomCode);
-        socket.emit('room-created', roomCode);
+        socket.emit('room-created', { roomCode, hostSecret });
         socket.emit('you-are-host');
 
         io.to(roomCode).emit('update-players', rooms[roomCode].players);
@@ -69,12 +73,18 @@ io.on('connection', (socket) => {
     });
 
     // 2. ENTRAR NA SALA (PLAYER)
-    socket.on('join-room', ({ roomCode, playerName, avatar }) => {
+    socket.on('join-room', ({ roomCode, playerName, avatar, hostSecret }) => {
         const room = rooms[roomCode];
         if (room) {
 
-            // Verifica se é o Host (reutilizando socket ou entrando após criar)
-            if (socket.id === room.hostId) {
+            // Verifica se é o Host (pelo ID ou pelo Secret)
+            if (socket.id === room.hostId || (hostSecret && hostSecret === room.hostSecret)) {
+                // Se for reconexão por Secret, atualiza o ID
+                if (socket.id !== room.hostId) {
+                    console.log(`Host reconectou com secret: ${socket.id}`);
+                    room.hostId = socket.id;
+                }
+
                 console.log(`Host entrou no lobby: ${socket.id}`);
                 // Não adiciona aos players
                 socket.join(roomCode);
