@@ -161,6 +161,11 @@ io.on('connection', (socket) => {
             room.state = 'JUDGING';
             room.tableCards.sort(() => Math.random() - 0.5);
             io.to(roomCode).emit('start-judging', room.tableCards);
+
+            // Redundância para garantir que apps destravem
+            setTimeout(() => {
+                io.to(roomCode).emit('update-table', room.tableCards);
+            }, 500);
         }
     });
 
