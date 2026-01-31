@@ -132,20 +132,29 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room || room.state !== 'PLAYING') return;
 
+        // Identifica jogador e juiz
         const player = room.players.find(p => p.id === socket.id);
         if (!player) return;
+
+        const judgeId = room.players[room.currentJudgeIndex].id;
+
+        // JUIZ NÃO JOGA CARTA
+        if (socket.id === judgeId) {
+            socket.emit('error', 'O Juiz não joga cartas nesta fase!');
+            return;
+        }
 
         // Evita jogar 2x
         if (room.tableCards.find(c => c.playerId === socket.id)) return;
 
         player.hand = player.hand.filter(c => c !== cardText);
+        // Garante que revealed começa false
         room.tableCards.push({ playerId: socket.id, text: cardText, revealed: false });
 
         io.to(player.id).emit('your-hand', player.hand);
         io.to(roomCode).emit('card-played', room.tableCards.length);
 
         // Verifica se todos MENOS o juiz jogaram
-        const judgeId = room.players[room.currentJudgeIndex].id;
         const playersToPlay = room.players.filter(p => p.id !== judgeId).length;
 
         if (room.tableCards.length >= playersToPlay) {
@@ -158,9 +167,16 @@ io.on('connection', (socket) => {
     // 5. REVELAR CARTA
     socket.on('reveal-card', ({ roomCode, index }) => {
         const room = rooms[roomCode];
-        if (room && room.tableCards[index]) {
-            // Alterna revelado (para permitir desvirar se quiser, ou apenas visual)
-            // Mas a regra diz 'revelar', então vamos setar true.
+        if (!room) return;
+
+        // Verifica se é o Juiz quem está pedindo
+        const judgeId = room.players[room.currentJudgeIndex].id;
+        // Opcional: permitir que HOST também revele (útil para testes ou TV touch)
+        const isHost = (socket.id === room.hostId);
+
+        if (socket.id !== judgeId && !isHost) return;
+
+        if (room.tableCards[index]) {
             if (!room.tableCards[index].revealed) {
                 room.tableCards[index].revealed = true;
                 io.to(roomCode).emit('update-table', room.tableCards);
