@@ -308,10 +308,15 @@ io.on('connection', (socket) => {
             });
 
             // Auto-start next round
+            console.log(`Round ended. Next round in ${nextRoundIn} seconds.`);
             setTimeout(() => {
+                const currentRoom = rooms[roomCode];
                 // Check if room still exists and state is still RESULT (prevent validation race conditions)
-                if (rooms[roomCode] && rooms[roomCode].state === 'RESULT') {
+                if (currentRoom && currentRoom.state === 'RESULT') {
+                    console.log(`Starting next round for room ${roomCode}`);
                     startRound(roomCode);
+                } else {
+                    console.log(`Cannot start next round. Room State: ${currentRoom ? currentRoom.state : 'Deleted'}`);
                 }
             }, nextRoundIn * 1000);
         }
