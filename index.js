@@ -30,7 +30,7 @@ const PERGUNTAS = [
 ];
 
 const RESPOSTAS = [
-    "Minha dignidade", "Um bode", "Três quilos de lasanha", "O chupa-cú de goianinha",
+    "Minha dignidade", "Um bode", "Três quilos de lasanha", "O chupa-cu de goianinha",
     "Gente feia", "Boleto vencido", "Um anão bombado", "Meias sujas", "Minha ex",
     "Dor e sofrimento", "Uma pochete", "Calcinha comestível", "Churrasco de gato",
     "Um peido silencioso", "A careca do meu tio", "Um vibrador de ouro", "Minha conta bancária negativa",
@@ -65,7 +65,7 @@ io.on('connection', (socket) => {
     });
 
     // 2. ENTRAR NA SALA (PLAYER)
-    socket.on('join-room', ({ roomCode, playerName, avatar }) => { // <--- Added avatar
+    socket.on('join-room', ({ roomCode, playerName, avatar }) => {
         const room = rooms[roomCode];
         if (room) { // aceita se state != LOBBY para reconexão
 
@@ -113,7 +113,7 @@ io.on('connection', (socket) => {
                     name: playerName,
                     score: 0,
                     hand: [],
-                    avatar: avatar || null // <--- Store avatar
+                    avatar: avatar || null
                 };
                 room.players.push(player);
                 socket.join(roomCode);
@@ -321,4 +321,11 @@ io.on('connection', (socket) => {
                     io.to(code).emit('start-judging', room.tableCards);
                 }
             }
-   
+        });
+    });
+});
+
+// Adicione '0.0.0.0' para liberar acesso externo/emulador
+server.listen(3000, '0.0.0.0', () => {
+    console.log('SERVER RODANDO NA PORTA 3000 (Aberto para rede)');
+});
