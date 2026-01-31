@@ -48,41 +48,55 @@ io.on('connection', (socket) => {
     console.log('Cliente conectado:', socket.id);
 
     // 1. CRIAR SALA (HOST)
-    socket.on('create-room', () => {
+    socket.on('create-room', (playerName = 'Host') => {
         const roomCode = generateCode();
         rooms[roomCode] = {
             hostId: socket.id,
-            players: [], // { id, name, score, hand: [] }
+            players: [],
             state: 'LOBBY',
             deck: [...RESPOSTAS].sort(() => Math.random() - 0.5),
             currentJudgeIndex: 0,
             currentQuestion: "",
-            tableCards: [] // { playerId, text, revealed: false }
+            tableCards: []
         };
+
         socket.join(roomCode);
         socket.emit('room-created', roomCode);
-        console.log(`Sala ${roomCode} criada.`);
+        socket.emit('you-are-host');
+
+        io.to(roomCode).emit('update-players', rooms[roomCode].players);
+        console.log(`Sala ${roomCode} criada. Host: ${socket.id}`);
     });
 
     // 2. ENTRAR NA SALA (PLAYER)
     socket.on('join-room', ({ roomCode, playerName, avatar }) => {
         const room = rooms[roomCode];
-        if (room) { // aceita se state != LOBBY para reconexão
+        if (room) {
 
-            // Verifica se é reconexão (busca por nome)
+            // Verifica se é o Host (reutilizando socket ou entrando após criar)
+            if (socket.id === room.hostId) {
+                console.log(`Host entrou no lobby: ${socket.id}`);
+                // Não adiciona aos players
+                socket.join(roomCode);
+                socket.emit('joined-success', { playerId: socket.id });
+                socket.emit('you-are-host');
+
+                // Envia estado atual
+                io.to(roomCode).emit('update-players', room.players);
+                return;
+            }
+
             const existingPlayer = room.players.find(p => p.name === playerName);
 
             if (existingPlayer) {
-                // RECONEXÃO: Atualiza ID e resincroniza
-                console.log(`Reconexão detectada: ${playerName} (${existingPlayer.id} -> ${socket.id})`);
-                existingPlayer.id = socket.id; // Atualiza para o novo socket
-                if (avatar) existingPlayer.avatar = avatar; // Update avatar if provided on reconnect
+                console.log(`Reconexão: ${playerName}`);
+                existingPlayer.id = socket.id;
+                if (avatar) existingPlayer.avatar = avatar;
                 socket.join(roomCode);
 
                 socket.emit('joined-success', { playerId: socket.id });
                 socket.emit('your-hand', existingPlayer.hand);
 
-                // Se o jogo já estiver rolando, envia dados da rodada
                 if (room.state !== 'LOBBY') {
                     const judge = room.players[room.currentJudgeIndex];
                     socket.emit('round-start', {
@@ -90,15 +104,9 @@ io.on('connection', (socket) => {
                         judgeId: judge.id,
                         judgeName: judge.name
                     });
-
-                    // Se já estiver na fase de julgamento ou mesa tiver cartas
                     if (room.tableCards.length > 0) {
-                        if (room.state === 'JUDGING') {
-                            socket.emit('start-judging', room.tableCards);
-                        } else {
-                            // Se apenas cartas jogadas mas ainda não julgando
-                            socket.emit('update-table', room.tableCards);
-                        }
+                        if (room.state === 'JUDGING') socket.emit('start-judging', room.tableCards);
+                        else socket.emit('update-table', room.tableCards);
                     }
                 }
 
@@ -106,7 +114,6 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            // Novo Jogador (somente se LOBBY)
             if (room.state === 'LOBBY') {
                 const player = {
                     id: socket.id,
@@ -121,7 +128,7 @@ io.on('connection', (socket) => {
                 io.to(roomCode).emit('update-players', room.players);
                 socket.emit('joined-success', { playerId: socket.id });
             } else {
-                socket.emit('error', 'Jogo já começou e seu nome não está na lista para reconectar.');
+                socket.emit('error', 'Jogo já começou.');
             }
         } else {
             socket.emit('error', 'Sala não encontrada.');
@@ -133,6 +140,14 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room) return;
 
+        // Host check
+        if (socket.id !== room.hostId) return;
+
+        if (room.players.length < 3) {
+            socket.emit('error', 'Mínimo de 3 jogadores para iniciar.');
+            return;
+        }
+
         // Se o deck estiver acabando, reembaralha (excluindo cartas nas mãos)
         if (room.deck.length < room.players.length * 5) {
             room.deck = [...RESPOSTAS].sort(() => Math.random() - 0.5);
@@ -141,7 +156,7 @@ io.on('connection', (socket) => {
         room.tableCards = [];
         room.state = 'PLAYING';
 
-        // Garante que o indice do juiz é válido (caso algm tenha saido)
+        // Garante que o indice do juiz é válido
         if (room.currentJudgeIndex >= room.players.length) {
             room.currentJudgeIndex = 0;
         } else {
@@ -169,6 +184,8 @@ io.on('connection', (socket) => {
         room.players.forEach(player => {
             io.to(player.id).emit('your-hand', player.hand);
         });
+
+        io.to(roomCode).emit('update-players', room.players);
     });
 
     // 4. JOGAR CARTA
@@ -276,7 +293,7 @@ io.on('connection', (socket) => {
                 room.currentJudgeIndex--;
             }
 
-            io.to(code).emit('update-players', room.players); // Avisa quem sobrou
+            io.to(code).emit('update-players', room.players);
 
             if (room.players.length === 0) {
                 delete rooms[code];
